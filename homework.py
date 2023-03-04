@@ -6,6 +6,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from dotenv import load_dotenv, find_dotenv
 from http import HTTPStatus
+import exception
 
 load_dotenv(find_dotenv())
 
@@ -33,24 +34,6 @@ handler = RotatingFileHandler(
 logger.addHandler(handler)
 
 
-class MissingVariable(Exception):
-    """Отсутствует одна из переменных окружения."""
-
-    pass
-
-
-class KeyNotFound(Exception):
-    """Отсутствует ключ."""
-
-    pass
-
-
-class UnknownStatus(Exception):
-    """Изменился статус проверки."""
-
-    pass
-
-
 def check_tokens():
     """Проверяет доступность переменных окружения."""
     check_up = all((PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID))
@@ -62,10 +45,11 @@ def send_message(bot, message):
     failed_message = 'Не удалось отправить сообщение'
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-        logger.debug(f'Бот отправил сообщение {message}')
     except telegram.error.TelegramError:
         logger.error(failed_message)
         raise Exception(failed_message)
+    else:
+        logger.debug(f'Бот отправил сообщение {message}')
 
 
 def get_api_answer(current_timestamp):
@@ -81,7 +65,6 @@ def get_api_answer(current_timestamp):
         logger.info(f'Отправлен запрос к API Практикума. '
                     f'Код ответа API: {homework_statuses.status_code}')
         if homework_statuses.status_code != HTTPStatus.OK:
-            logging.error('Запрошеный URL не может быть получен')
             raise Exception('Запрошеный URL не может быть получен')
     except requests.exceptions.RequestException as error:
         message = f'Эндпойнт недоступен: {error}'
@@ -92,20 +75,13 @@ def get_api_answer(current_timestamp):
 
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
-    if isinstance(response, dict):
-        try:
-            homework = response['homeworks']
-        except KeyError as error:
-            message = f'В ответе не обнаружен ключ {error}'
-            logger.error(message)
-            raise KeyNotFound(message)
-        if not isinstance(homework, list):
-            raise TypeError('Ответ не содержит список домашних работ')
-        message = 'Получены сведения о последней домашней работе'
-        logger.info(message) if len(homework) else None
-        return homework
-    else:
-        raise TypeError('В ответе API не обнаружен словарь')
+    if not isinstance(response, dict):
+        raise TypeError(f'В переменной {response} ожидался словарью')
+    if response.get('homeworks') is None:
+        raise KeyError('Возможно введены неверные переменные.')
+    elif not isinstance(response['homeworks'], list):
+        raise TypeError('Данные пришли не ввиде списка')
+    return response['homeworks']
 
 
 def parse_status(homework):
@@ -124,7 +100,7 @@ def parse_status(homework):
     except KeyError as error:
         message = f'Неизвестный статус домашней работы: {error}'
         logger.error(message)
-        raise UnknownStatus(message)
+        raise exception.UnknownStatus(message)
     result = (f'Изменился статус проверки работы "{homework_name}". '
               f'{verdict}')
     return result
@@ -137,7 +113,7 @@ def main():
     if not check_tokens():
         message = 'Отсутствует одна из переменных окружения'
         logger.critical(message)
-        raise MissingVariable(message)
+        raise exception.MissingVariable(message)
 
     try:
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
